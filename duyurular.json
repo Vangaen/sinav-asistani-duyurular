@@ -1,5 +1,19 @@
 {
   "version": 1,
-  "updated": "2026-11-13T06:00:00Z",
-  "items": []
+  "updated": "2026-11-13T12:00:00Z",
+  "items": [
+    {
+      "id": "test-1",
+      "exam": "yks",
+      "type": "haber",
+      "title": "TEST: Gelişmeler kartı çalışıyor",
+      "body": "Bu bir deneme kaydıdır. Gerçek duyuru değildir.",
+      "published": "2026-11-13",
+      "expires": "2026-11-20",
+      "source_name": "Deneme",
+      "source_url": "https://github.com/Vangaen/sinav-asistani-duyurular",
+      "sponsored": false,
+      "status": "published"
+    }
+  ]
 }
