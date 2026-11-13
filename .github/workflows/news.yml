@@ -1,0 +1,29 @@
+name: Duyuruları güncelle
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # her gün 05:00 UTC (08:00 TR)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Özet üret ve duyurular.json'a ekle
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python tools/news/news_tool.py --feed duyurular.json --seen tools/news/seen.json
+      - name: Değişiklik varsa kaydet
+        run: |
+          git config user.name "duyuru-botu"
+          git config user.email "actions@users.noreply.github.com"
+          git add duyurular.json tools/news/seen.json
+          git diff --cached --quiet || git commit -m "Duyurular güncellendi"
+          git push
