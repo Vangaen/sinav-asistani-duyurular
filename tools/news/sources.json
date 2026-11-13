@@ -1,0 +1,25 @@
+{
+  "_not": "Otomatik çekilecek kaynaklar. enabled=false olanlar KAPSAM DIŞI; nedeni 'reason' alanında (ayrıntı: PROGRESS.md Görev 6 notları).",
+  "sources": [
+    {
+      "id": "osym-duyurular",
+      "name": "ÖSYM",
+      "exam": "yks",
+      "kind": "rss",
+      "url": "",
+      "page_url": "https://www.osym.gov.tr/Duyurular/Index",
+      "enabled": false,
+      "reason": "RSS/Atom yok; robots.txt gerçek dosya değil (ana sayfaya yönlendiriyor); kullanım şartı/telif metni bulunamadı; duyuru sayfası ~750 KB dinamik HTML, kırılgan. Resmi duyuru elle gelen kutusundan (inbox.json) girilir."
+    },
+    {
+      "id": "meb-haberler",
+      "name": "MEB",
+      "exam": "yks",
+      "kind": "rss",
+      "url": "",
+      "page_url": "https://www.meb.gov.tr/",
+      "enabled": false,
+      "reason": "meb.gov.tr/robots.txt Claude/anthropic-ai dahil yapay zekâ botlarını ve arşivleyicileri açıkça yasaklıyor; RSS de bulunamadı. Çekilmez."
+    }
+  ]
+}
