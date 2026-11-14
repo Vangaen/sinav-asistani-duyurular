@@ -24,18 +24,22 @@ import xml.etree.ElementTree as ET
 HERE = os.path.dirname(os.path.abspath(__file__))
 MODEL = "claude-haiku-5-5"
 API_URL = "https://api.anthropic.com/v1/messages"
-USER_AGENT = "sinav-asistani-news/1.0"
+MAX_TOKENS = 2000
+USER_AGENT ="sinav-asistani-news/1.0"
 TYPES = {"tarih", "haber", "deneme", "uyari"}
+CATEGORIES = {"deneme", "sonuc", "osym", "diger"}  # Gündem sekmesi (Görev 18); boş/bilinmeyen = diger
+MAX_ITEMS = 200  # feed (ve uygulama önbelleği) en yeni bu kadar kaydı tutar; süresi dolanlar ARŞİVDE kalır
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 VERBATIM_WORDS = 8  # özette kaynaktan ardışık bu kadar kelime aynıysa kopya sayılır
 
 PROMPT = """Aşağıdaki resmi duyuru metnini oku ve YALNIZCA şu JSON'u döndür (başka metin yok):
-{{"type": "tarih|haber|deneme|uyari", "title": "kısa başlık (en çok 70 karakter)",
+{{"type": "tarih|haber|deneme|uyari", "category": "deneme|sonuc|osym|diger", "title": "kısa başlık (en çok 70 karakter)",
  "body": "2-3 cümlelik sade Türkçe bilgi", "date": "YYYY-MM-DD veya boş", "date_end": "YYYY-MM-DD veya boş"}}
 Kurallar:
 - Orijinal metni kopyalama; yalnızca olguyu kendi cümlelerinle yaz.
 - Emin olmadığın tarihi YAZMA (boş bırak). Tarihi metinde açıkça görmediysen tahmin etme.
 - type: sınav/başvuru/sonuç tarihi içeriyorsa "tarih"; ülke geneli deneme ise "deneme"; önemli uyarı ise "uyari"; diğer "haber".
+- category: yaklaşan genel deneme sınavı ise "deneme"; açıklanan deneme/sınav sonucu ise "sonuc"; ÖSYM/MEB resmi duyurusu ise "osym"; diğer "diger".
 Kaynak adı: {source}
 Metin:
 {text}
@@ -137,23 +141,60 @@ def collect(sources_path, inbox_path):
 
 # --- Özetleme ------------------------------------------------------------------
 
-def claude_summarize(entry):
-    """Claude API ile özet. Dönen: sözlük (PROMPT'taki alanlar) ya da None."""
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not key:
-        return None
-    body = {"model": MODEL, "max_tokens": 500, "messages": [{
+def _call_api(entry, key):
+    """Tek API çağrısı; cevap sözlüğünü döndürür (ağ/HTTP hatasında istisna)."""
+    body = {"model": MODEL, "max_tokens": MAX_TOKENS, "messages": [{
         "role": "user", "content": PROMPT.format(source=entry["source_name"], text=entry["text"][:6000])}]}
     req = urllib.request.Request(API_URL, data=json.dumps(body).encode("utf-8"), headers={
         "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            reply = json.load(r)
-        text = "".join(b.get("text", "") for b in reply.get("content", []))
-        return json.loads(text[text.index("{"):text.rindex("}") + 1])
-    except Exception as e:
-        print("özetleme başarısız: %s" % e, file=sys.stderr)
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+
+def _text_of(reply):
+    """Yalnızca type == "text" bloklarını birleştirir (thinking vb. atlanır)."""
+    blocks = reply.get("content", []) if isinstance(reply, dict) else []
+    return "".join(str(b.get("text", "")) for b in blocks
+                   if isinstance(b, dict) and b.get("type") == "text")
+
+
+def _parse_summary(text):
+    """Metindeki ilk '{' ile son '}' arasını JSON olarak okur; sözlük değilse ValueError."""
+    data = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    if not isinstance(data, dict):
+        raise ValueError("JSON nesnesi değil")
+    return data
+
+
+def _log_bad_reply(reply, text, err):
+    """Ayrıştırma hatasında tanı bilgisi (stderr). API anahtarı buraya hiç girmez."""
+    blocks = reply.get("content", []) if isinstance(reply, dict) else []
+    types = [b.get("type", "?") if isinstance(b, dict) else type(b).__name__ for b in blocks]
+    stop = reply.get("stop_reason") if isinstance(reply, dict) else None
+    print("özetleme başarısız: %s | stop_reason=%s | blok türleri=%s | metin(ilk 300)=%r"
+          % (err, stop, types, text[:300]), file=sys.stderr)
+
+
+def claude_summarize(entry):
+    """Claude API ile özet. Dönen: sözlük (PROMPT'taki alanlar) ya da None.
+    JSON ayrıştırma başarısızsa bir kez yeniden dener."""
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not key:
         return None
+    for attempt in range(2):
+        try:
+            reply = _call_api(entry, key)
+        except Exception as e:  # ağ/HTTP hatası: yeniden denenmez
+            print("özetleme başarısız (API çağrısı): %s" % e, file=sys.stderr)
+            return None
+        text = _text_of(reply)
+        try:
+            return _parse_summary(text)
+        except ValueError as e:  # json.JSONDecodeError de ValueError'dır
+            _log_bad_reply(reply, text, e)
+            if attempt == 0:
+                print("bir kez yeniden deneniyor.", file=sys.stderr)
+    return None
 
 
 def build_item(entry, summary, today):
@@ -167,6 +208,7 @@ def build_item(entry, summary, today):
         date_end = ""
     body = str(summary.get("body", "")).strip()
     title = str(summary.get("title", "")).strip() or entry["title"]
+    category = summary.get("category") if summary.get("category") in CATEGORIES else ("deneme" if typ == "deneme" else "diger")
     if date and typ == "haber":
         typ = "tarih"
     status = "published"
@@ -179,7 +221,7 @@ def build_item(entry, summary, today):
     else:
         expires = add_days(today, 30)
     return {
-        "id": stable_id(entry["exam"], entry["key"]), "exam": entry["exam"], "type": typ,
+        "id": stable_id(entry["exam"], entry["key"]), "exam": entry["exam"], "type": typ, "category": category,
         "title": title[:90], "body": body, "date": date, "date_end": date_end,
         "source_name": entry["source_name"], "source_url": entry["url"],
         "published": today, "expires": expires, "sponsored": False, "status": status,
@@ -189,7 +231,7 @@ def build_item(entry, summary, today):
 # --- Birleştirme ---------------------------------------------------------------
 
 def run(feed_path, seen_path, entries, summarizer, today):
-    """Yeni girdileri özetleyip feed'e ekler; süresi dolanları temizler. Eklenen kayıtları döndürür."""
+    """Yeni girdileri özetleyip feed'e ekler; en yeni MAX_ITEMS kaydı tutar (süresi dolanlar arşivde kalır). Eklenen kayıtları döndürür."""
     feed = load_json(feed_path, {"version": 1, "updated": "", "items": []})
     items = feed.get("items", [])
     seen = set(load_json(seen_path, []))
@@ -207,7 +249,8 @@ def run(feed_path, seen_path, entries, summarizer, today):
         known.add(item["id"])
         seen.add(item["id"])
         added.append(item)
-    items = [i for i in items if not i.get("expires") or i["expires"] >= today]
+    # Süresi dolanlar silinmez (Gündem arşivi); yalnızca en yeni MAX_ITEMS kayıt kalır.
+    items = sorted(items, key=lambda i: i.get("published", ""), reverse=True)[:MAX_ITEMS]
     feed.update({"version": 1, "updated": today + "T06:00:00Z", "items": items})
     save_json(feed_path, feed)
     save_json(seen_path, sorted(seen))
